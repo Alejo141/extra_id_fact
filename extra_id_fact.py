@@ -1,5 +1,5 @@
 import streamlit as st
-import pypdf
+import PyPDF2 as pypdf
 import re
 import io
 import pandas as pd
@@ -79,7 +79,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     """Extrae todo el texto del PDF usando pypdf."""
     text = ""
     try:
-        reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+        reader = pypdf.PdfReader(io.BytesIO(file_bytes))  # type: ignore
         for page in reader.pages:
             t = page.extract_text()
             if t:
