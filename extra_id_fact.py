@@ -2,68 +2,58 @@ import streamlit as st
 import re
 import io
 import pandas as pd
-from pdfminer.high_level import extract_text as pdfminer_extract
 
-# ── Page config ────────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Extractor de Facturas",
-    page_icon="⚡",
-    layout="centered",
-)
+st.set_page_config(page_title="Extractor de Facturas", page_icon="⚡", layout="centered")
 
-# ── Styles ─────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-  html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-  .main { background: #F7F9FC; }
   .hero {
     background: linear-gradient(135deg, #00B4A6 0%, #004B6B 100%);
-    border-radius: 14px;
-    padding: 28px 32px 22px;
-    margin-bottom: 28px;
-    color: white;
+    border-radius: 14px; padding: 28px 32px 22px; margin-bottom: 28px; color: white;
   }
   .hero h1 { font-size: 1.7rem; font-weight: 700; margin: 0 0 4px; }
   .hero p  { font-size: 0.93rem; opacity: 0.85; margin: 0; }
   .result-card {
-    background: white;
-    border: 1px solid #E2E8F0;
-    border-radius: 10px;
-    padding: 16px 20px;
-    margin-bottom: 10px;
-    display: flex;
-    align-items: center;
-    gap: 14px;
+    background: white; border: 1px solid #E2E8F0; border-radius: 10px;
+    padding: 16px 20px; margin-bottom: 10px;
   }
   .badge-ok  { background:#D1FAE5; color:#065F46; border-radius:6px; padding:3px 10px; font-size:0.8rem; font-weight:600; }
   .badge-err { background:#FEE2E2; color:#991B1B; border-radius:6px; padding:3px 10px; font-size:0.8rem; font-weight:600; }
-  .filename  { font-weight:600; color:#1E293B; font-size:0.95rem; }
   .factura   { color:#00B4A6; font-weight:700; font-size:1.05rem; }
-  .stat-box  { background: white; border: 1px solid #E2E8F0; border-radius: 10px; padding: 18px; text-align: center; }
-  .stat-num  { font-size: 2rem; font-weight: 700; color: #004B6B; }
-  .stat-lbl  { font-size: 0.82rem; color: #64748B; margin-top: 2px; }
+  .stat-box  { background:white; border:1px solid #E2E8F0; border-radius:10px; padding:18px; text-align:center; }
+  .stat-num  { font-size:2rem; font-weight:700; color:#004B6B; }
+  .stat-lbl  { font-size:0.82rem; color:#64748B; margin-top:2px; }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("""
 <div class="hero">
   <h1>⚡ Extractor de Facturas</h1>
-  <p>Sube uno o varios PDFs de facturas de servicios públicos y extrae el número de Factura electrónica de venta automáticamente.</p>
+  <p>Sube uno o varios PDFs y extrae el número de Factura electrónica de venta.</p>
 </div>
 """, unsafe_allow_html=True)
 
-# ── Patrones de búsqueda ───────────────────────────────────────────────────────
 PATTERNS = [
     r"Factura\s+electr[oó]nica\s+de\s+venta\s+N[°o\.º]?\s*:?\s*([A-Z0-9\-]+)",
     r"\bFE(?:SP)?\s*\d{4,6}\b",
     r"N[°º]\s*:?\s*([A-Z]{2,}\s*\d{3,})",
 ]
 
-def extract_text_from_pdf(file_bytes: bytes) -> str:
-    """Extrae texto con pdfminer.six."""
+def extract_text_pdf_raw(file_bytes: bytes) -> str:
+    """Extrae texto de un PDF usando solo la librería estándar de Python."""
     try:
-        return pdfminer_extract(io.BytesIO(file_bytes)) or ""
+        raw = file_bytes.decode("latin-1", errors="ignore")
+        # Extraer bloques de texto entre BT y ET (operadores PDF)
+        chunks = re.findall(r'BT(.*?)ET', raw, re.DOTALL)
+        texts = []
+        for chunk in chunks:
+            # Strings entre paréntesis: (texto)
+            parts = re.findall(r'\(([^)]*)\)', chunk)
+            texts.extend(parts)
+        text = " ".join(texts)
+        # Limpiar caracteres de control
+        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', text)
+        return text
     except Exception:
         return ""
 
@@ -75,7 +65,6 @@ def find_factura_number(text: str):
             return result.strip()
     return None
 
-# ── Upload ─────────────────────────────────────────────────────────────────────
 uploaded = st.file_uploader(
     "Selecciona los archivos PDF",
     type=["pdf"],
@@ -89,7 +78,7 @@ if uploaded:
     with st.spinner("Procesando facturas…"):
         for f in uploaded:
             file_bytes = f.read()
-            text = extract_text_from_pdf(file_bytes)
+            text = extract_text_pdf_raw(file_bytes)
             numero = find_factura_number(text)
             results.append({
                 "Archivo": f.name,
@@ -118,22 +107,19 @@ if uploaded:
         numero_html = f'<span class="factura">{r["Factura electrónica N°"]}</span>' if r["_ok"] else '<span style="color:#94A3B8">No detectado</span>'
         st.markdown(f"""
         <div class="result-card">
-          <div style="flex:1">
-            <div class="filename">📄 {r["Archivo"]}</div>
-            <div style="margin-top:4px;font-size:0.9rem;color:#475569">Factura N°: {numero_html}</div>
-          </div>
-          {badge}
+          <div style="margin-bottom:6px"><strong>📄 {r["Archivo"]}</strong> &nbsp; {badge}</div>
+          <div style="font-size:0.9rem;color:#475569">Factura N°: {numero_html}</div>
         </div>
         """, unsafe_allow_html=True)
 
         if not r["_ok"] and r["_text"]:
-            with st.expander(f"🔍 Ver texto extraído de {r['Archivo']}"):
-                st.text(r["_text"][:3000] + ("…" if len(r["_text"]) > 3000 else ""))
+            with st.expander(f"🔍 Texto extraído de {r['Archivo']} (debug)"):
+                st.text(r["_text"][:3000])
 
     st.markdown("---")
     df = pd.DataFrame([{"Archivo": r["Archivo"], "Factura electrónica N°": r["Factura electrónica N°"]} for r in results])
     csv = df.to_csv(index=False).encode("utf-8-sig")
-    st.download_button("⬇ Descargar resultados en CSV", data=csv, file_name="facturas_extraidas.csv", mime="text/csv", use_container_width=True)
+    st.download_button("⬇ Descargar CSV", data=csv, file_name="facturas_extraidas.csv", mime="text/csv", use_container_width=True)
 
 else:
     st.info("👆 Sube tus PDFs arriba para comenzar.")
