@@ -1,3 +1,2 @@
 streamlit
-pdfminer.six
 pandas
