@@ -1,6 +1,9 @@
 import streamlit as st
 import re
 import io
+import base64
+import json
+import urllib.request
 import pandas as pd
 
 st.set_page_config(page_title="Extractor de Facturas", page_icon="⚡", layout="centered")
@@ -29,41 +32,69 @@ st.markdown("""
 st.markdown("""
 <div class="hero">
   <h1>⚡ Extractor de Facturas</h1>
-  <p>Sube uno o varios PDFs y extrae el número de Factura electrónica de venta.</p>
+  <p>Sube uno o varios PDFs y extrae el número de Factura electrónica de venta usando IA.</p>
 </div>
 """, unsafe_allow_html=True)
 
-# ── Patrones en orden de precisión ────────────────────────────────────────────
-# Las facturas de Sunco Energy tienen el valor separado de la etiqueta,
-# pero siempre con prefijo FE seguido de letras opcionales y número.
-PATTERNS = [
-    r"\b(FE[A-Z]{0,3}\s*\d{4,6})\b",                              # FESP 26051, FE 1234, FEVT 9999
-    r"Factura\s+electr[oó]nica[^\n]{0,60}?\n\s*([A-Z]{2,}\s*\d{4,6})",  # etiqueta + valor en línea siguiente
-    r"prefijo\s+FE\s+desde\s*\n[^\n]+\n[^\n]+\n\s*([A-Z0-9]+\s+\d+)",   # zona pie de página
-]
+# ── API Key ────────────────────────────────────────────────────────────────────
+api_key = st.text_input("🔑 API Key de Anthropic", type="password",
+                        help="Consíguela en console.anthropic.com")
 
-def extract_text_pdf_raw(file_bytes: bytes) -> str:
-    """Extrae texto de un PDF usando solo la librería estándar de Python."""
+if not api_key:
+    st.info("Ingresa tu API Key de Anthropic para comenzar.")
+    st.stop()
+
+def extract_factura_with_claude(pdf_bytes: bytes, api_key: str) -> str:
+    """Envía el PDF a Claude y pide que extraiga el número de factura."""
+    b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
+
+    payload = {
+        "model": "claude-opus-4-6",
+        "max_tokens": 200,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": b64
+                        }
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "En este PDF hay una factura de servicios públicos. "
+                            "Busca el campo 'Factura electrónica de venta N°' y extrae SOLO su valor "
+                            "(ejemplo: FESP 26051). "
+                            "Responde únicamente con el valor, sin texto adicional. "
+                            "Si no lo encuentras, responde exactamente: NO_ENCONTRADO"
+                        )
+                    }
+                ]
+            }
+        ]
+    }
+
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01"
+        }
+    )
     try:
-        raw = file_bytes.decode("latin-1", errors="ignore")
-        chunks = re.findall(r'BT(.*?)ET', raw, re.DOTALL)
-        texts = []
-        for chunk in chunks:
-            parts = re.findall(r'\(([^)]*)\)', chunk)
-            texts.extend(parts)
-        text = " ".join(texts)
-        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', text)
-        return text
-    except Exception:
-        return ""
-
-def find_factura_number(text: str):
-    for pattern in PATTERNS:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            result = match.group(1) if match.lastindex else match.group(0)
-            return result.strip()
-    return None
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+            text = result["content"][0]["text"].strip()
+            return None if text == "NO_ENCONTRADO" else text
+    except Exception as e:
+        return f"ERROR: {e}"
 
 # ── Upload ─────────────────────────────────────────────────────────────────────
 uploaded = st.file_uploader(
@@ -76,17 +107,19 @@ if uploaded:
     st.markdown("---")
     results = []
 
-    with st.spinner("Procesando facturas…"):
-        for f in uploaded:
-            file_bytes = f.read()
-            text = extract_text_pdf_raw(file_bytes)
-            numero = find_factura_number(text)
-            results.append({
-                "Archivo": f.name,
-                "Factura electrónica N°": numero or "—",
-                "_ok": numero is not None,
-                "_text": text,
-            })
+    progress = st.progress(0, text="Procesando…")
+    for i, f in enumerate(uploaded):
+        progress.progress((i) / len(uploaded), text=f"Procesando {f.name}…")
+        file_bytes = f.read()
+        numero = extract_factura_with_claude(file_bytes, api_key)
+        ok = numero is not None and not str(numero).startswith("ERROR")
+        results.append({
+            "Archivo": f.name,
+            "Factura electrónica N°": numero or "—",
+            "_ok": ok,
+            "_error": numero if str(numero or "").startswith("ERROR") else None,
+        })
+    progress.progress(1.0, text="¡Listo!")
 
     total = len(results)
     found = sum(1 for r in results if r["_ok"])
@@ -105,17 +138,13 @@ if uploaded:
 
     for r in results:
         badge = '<span class="badge-ok">✓ Encontrado</span>' if r["_ok"] else '<span class="badge-err">✗ No encontrado</span>'
-        numero_html = f'<span class="factura">{r["Factura electrónica N°"]}</span>' if r["_ok"] else '<span style="color:#94A3B8">No detectado</span>'
+        numero_html = f'<span class="factura">{r["Factura electrónica N°"]}</span>' if r["_ok"] else '<span style="color:#94A3B8">{}</span>'.format(r["Factura electrónica N°"])
         st.markdown(f"""
         <div class="result-card">
           <div style="margin-bottom:6px"><strong>📄 {r["Archivo"]}</strong> &nbsp; {badge}</div>
           <div style="font-size:0.9rem;color:#475569">Factura N°: {numero_html}</div>
         </div>
         """, unsafe_allow_html=True)
-
-        if not r["_ok"] and r["_text"]:
-            with st.expander(f"🔍 Texto extraído de {r['Archivo']} (debug)"):
-                st.text(r["_text"][:3000])
 
     st.markdown("---")
     df = pd.DataFrame([{"Archivo": r["Archivo"], "Factura electrónica N°": r["Factura electrónica N°"]} for r in results])
