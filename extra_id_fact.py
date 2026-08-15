@@ -33,25 +33,25 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# ── Patrones en orden de precisión ────────────────────────────────────────────
+# Las facturas de Sunco Energy tienen el valor separado de la etiqueta,
+# pero siempre con prefijo FE seguido de letras opcionales y número.
 PATTERNS = [
-    r"Factura\s+electr[oó]nica\s+de\s+venta\s+N[°o\.º]?\s*:?\s*([A-Z0-9\-]+)",
-    r"\bFE(?:SP)?\s*\d{4,6}\b",
-    r"N[°º]\s*:?\s*([A-Z]{2,}\s*\d{3,})",
+    r"\b(FE[A-Z]{0,3}\s*\d{4,6})\b",                              # FESP 26051, FE 1234, FEVT 9999
+    r"Factura\s+electr[oó]nica[^\n]{0,60}?\n\s*([A-Z]{2,}\s*\d{4,6})",  # etiqueta + valor en línea siguiente
+    r"prefijo\s+FE\s+desde\s*\n[^\n]+\n[^\n]+\n\s*([A-Z0-9]+\s+\d+)",   # zona pie de página
 ]
 
 def extract_text_pdf_raw(file_bytes: bytes) -> str:
     """Extrae texto de un PDF usando solo la librería estándar de Python."""
     try:
         raw = file_bytes.decode("latin-1", errors="ignore")
-        # Extraer bloques de texto entre BT y ET (operadores PDF)
         chunks = re.findall(r'BT(.*?)ET', raw, re.DOTALL)
         texts = []
         for chunk in chunks:
-            # Strings entre paréntesis: (texto)
             parts = re.findall(r'\(([^)]*)\)', chunk)
             texts.extend(parts)
         text = " ".join(texts)
-        # Limpiar caracteres de control
         text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', text)
         return text
     except Exception:
@@ -65,6 +65,7 @@ def find_factura_number(text: str):
             return result.strip()
     return None
 
+# ── Upload ─────────────────────────────────────────────────────────────────────
 uploaded = st.file_uploader(
     "Selecciona los archivos PDF",
     type=["pdf"],
