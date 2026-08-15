@@ -1,10 +1,8 @@
 import streamlit as st
-import pdfplumber
 import pypdf
 import re
 import io
 import pandas as pd
-from pathlib import Path
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -78,27 +76,16 @@ PATTERNS = [
 ]
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
-    """Extrae todo el texto del PDF usando pdfplumber (fallback: pypdf)."""
+    """Extrae todo el texto del PDF usando pypdf."""
     text = ""
     try:
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            for page in pdf.pages:
-                t = page.extract_text()
-                if t:
-                    text += t + "\n"
+        reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                text += t + "\n"
     except Exception:
         pass
-
-    if not text.strip():
-        try:
-            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-            for page in reader.pages:
-                t = page.extract_text()
-                if t:
-                    text += t + "\n"
-        except Exception:
-            pass
-
     return text
 
 
